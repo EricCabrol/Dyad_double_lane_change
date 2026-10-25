@@ -1,0 +1,43 @@
+"Step-steer manoeuvre on the single-track vehicle. The steer angle is ramped in over 0.15 s starting at t = 1 s while a constant longitudinal force holds the initial speed against drag and rolling resistance."
+test component TestBicycleStepSteer
+  "Steer angle held after the ramp [rad]"
+  parameter delta_max::Real = 0.06
+  "Initial and held forward speed [m/s]"
+  parameter v0::Real = 25.0
+  "Longitudinal force that balances drag and rolling resistance at v0 [N]"
+  parameter Fx_hold::Real = 0.5 * 1.225 * 0.70 * v0^2 + 0.012 * 1600 * 9.81
+
+  steer = BlockComponents.Sources.Ramp(start_time = 1.0, offset = 0.0, duration = 0.15, height = delta_max)
+  drive = BlockComponents.Sources.Constant(k = Fx_hold)
+  car = VehicleBicycle3DOF(vx0 = v0)
+relations
+  connect(steer.y, car.delta)
+  connect(drive.y, car.Fx_req)
+end
+
+"Step-steer manoeuvre on the double-track vehicle, identical inputs to TestBicycleStepSteer."
+test component TestDoubleTrackStepSteer
+  "Steer angle held after the ramp [rad]"
+  parameter delta_max::Real = 0.06
+  "Initial and held forward speed [m/s]"
+  parameter v0::Real = 25.0
+  "Longitudinal force that balances drag and rolling resistance at v0 [N]"
+  parameter Fx_hold::Real = 0.5 * 1.225 * 0.70 * v0^2 + 0.012 * 1600 * 9.81
+
+  steer = BlockComponents.Sources.Ramp(start_time = 1.0, offset = 0.0, duration = 0.15, height = delta_max)
+  drive = BlockComponents.Sources.Constant(k = Fx_hold)
+  car = VehicleDoubleTrack3DOF(vx0 = v0)
+relations
+  connect(steer.y, car.delta)
+  connect(drive.y, car.Fx_req)
+end
+
+analysis BicycleStepSteer
+  extends TransientAnalysis(stop = 6.0, abstol = 1e-8, reltol = 1e-8)
+  model = TestBicycleStepSteer()
+end
+
+analysis DoubleTrackStepSteer
+  extends TransientAnalysis(stop = 6.0, abstol = 1e-8, reltol = 1e-8)
+  model = TestDoubleTrackStepSteer()
+end

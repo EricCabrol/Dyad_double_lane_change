@@ -1,0 +1,230 @@
+"Common 3-DOF planar vehicle body. The three degrees of freedom are the body-frame longitudinal velocity vx, lateral velocity vy and yaw rate r. Inertial-frame position and heading are carried as quadrature states for plotting. Aerodynamic drag, rolling resistance and the lagged longitudinal load transfer live here; a concrete subtype must supply Fx_tires, Fy_tires and Mz_tires."
+partial component PlanarVehicleBase
+  "Road-wheel steer angle [rad], positive steering left"
+  delta = RealInput()
+  "Requested total longitudinal force at the contact patches [N], positive driving"
+  Fx_req = RealInput()
+
+  "Vehicle mass"
+  parameter m::Mass = 1600
+  "Yaw moment of inertia about the CG"
+  parameter Izz::MomentOfInertia = 2400
+  "CG to front axle"
+  parameter a::Length = 1.2
+  "CG to rear axle"
+  parameter b::Length = 1.4
+  "CG height above the road"
+  parameter h_cg::Length = 0.55
+  "Drag area Cd*A"
+  parameter CdA::Area = 0.70
+  "Air density"
+  parameter rho::Density = 1.225
+  "Rolling resistance coefficient"
+  parameter Crr::Real = 0.012
+  "Gravitational acceleration"
+  parameter g::Acceleration = 9.81
+  "Suspension/pitch-roll lag applied to the load transfer"
+  parameter tau_lt::Time = 0.05
+  "Low-speed regularisation velocity used in the slip-angle definition"
+  parameter v_eps::Velocity = 1.0
+  "Speed scale of the rolling-resistance sign function"
+  parameter v_eps_roll::Velocity = 0.5
+  "Initial forward speed"
+  parameter vx0::Velocity = 25.0
+  "Fraction of the requested longitudinal force applied at the front axle"
+  parameter drive_split::Real = 0.0
+
+  "Body-frame longitudinal velocity"
+  variable vx::Velocity
+  "Body-frame lateral velocity"
+  variable vy::Velocity
+  "Yaw rate"
+  variable r::AngularVelocity
+  "Inertial X position of the CG"
+  variable X::Length
+  "Inertial Y position of the CG"
+  variable Y::Length
+  "Heading angle"
+  variable psi::Angle
+  "Longitudinal acceleration measured at the CG"
+  variable ax::Acceleration
+  "Lateral acceleration measured at the CG"
+  variable ay::Acceleration
+  "Suspension-lagged longitudinal acceleration driving the pitch load transfer"
+  variable ax_lag::Acceleration
+  "Total front-to-rear load transfer"
+  variable dFz_x::Force
+  "Body-frame longitudinal force from all tyres"
+  variable Fx_tires::Force
+  "Body-frame lateral force from all tyres"
+  variable Fy_tires::Force
+  "Yaw moment about the CG from all tyres"
+  variable Mz_tires::Torque
+  "Aerodynamic drag"
+  variable F_aero::Force
+  "Rolling resistance"
+  variable F_roll::Force
+  "Vehicle sideslip angle at the CG"
+  variable beta::Angle
+relations
+  initial vx = vx0
+  initial vy = 0
+  initial r = 0
+  initial X = 0
+  initial Y = 0
+  initial psi = 0
+  initial ax_lag = 0
+
+  "Aerodynamic drag, smooth through zero speed"
+  F_aero = 0.5 * rho * CdA * vx * sqrt(vx^2 + v_eps^2)
+  "Rolling resistance, smooth through zero speed"
+  F_roll = Crr * m * g * tanh(vx / v_eps_roll)
+
+  "Longitudinal momentum in the rotating body frame"
+  m * ax = Fx_tires - F_aero - F_roll
+  ax = der(vx) - vy * r
+  "Lateral momentum in the rotating body frame"
+  m * ay = Fy_tires
+  ay = der(vy) + vx * r
+  "Yaw momentum"
+  Izz * der(r) = Mz_tires
+
+  "Inertial-frame trajectory"
+  der(X) = vx * cos(psi) - vy * sin(psi)
+  der(Y) = vx * sin(psi) + vy * cos(psi)
+  der(psi) = r
+
+  "First-order suspension lag on the pitch response, which also breaks the Fz -> Fy -> ax -> Fz algebraic loop"
+  tau_lt * der(ax_lag) = ax - ax_lag
+  "Quasi-static longitudinal load transfer: the front axle sheds load under acceleration"
+  dFz_x = m * h_cg * ax_lag / (a + b)
+
+  "Sideslip angle at the CG"
+  beta = atan(vy / sqrt(vx^2 + v_eps^2))
+
+  "Validity envelope: the regularised slip-angle definition in WheelStation assumes forward motion, so results are meaningless once the vehicle travels backwards"
+  assert vx > -v_eps
+end
+
+"3-DOF single-track (bicycle) vehicle. One lumped tyre per axle, so only longitudinal load transfer acts; there is no lateral load transfer and no track-width yaw moment."
+component VehicleBicycle3DOF
+  extends PlanarVehicleBase
+  "Front Magic Formula stiffness factor. Sets front axle cornering stiffness and lumps in the understeer contribution of front suspension compliance and roll steer."
+  parameter B_f::Real = 8.0
+  "Rear Magic Formula stiffness factor"
+  parameter B_r::Real = 10.0
+  "Magic Formula shape factor"
+  parameter C_tire::Real = 1.9
+  "Magic Formula curvature factor"
+  parameter E_tire::Real = 0.97
+  "Peak friction coefficient at the nominal axle load"
+  parameter mu0::Real = 1.0
+  "Friction load sensitivity"
+  parameter k_mu::Real = 0.15
+
+  front = WheelStation(x_s = a, y_s = 0, v_eps = v_eps, B = B_f, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 2)
+  rear = WheelStation(x_s = -b, y_s = 0, v_eps = v_eps, B = B_r, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 2)
+
+  "Front axle vertical load"
+  variable Fz_f::Force
+  "Rear axle vertical load"
+  variable Fz_r::Force
+relations
+  "Static axle loads plus longitudinal transfer"
+  Fz_f = m * g * b / (a + b) - dFz_x
+  Fz_r = m * g * a / (a + b) + dFz_x
+
+  front.vx = vx
+  front.vy = vy
+  front.r = r
+  front.delta = delta
+  front.Fz = Fz_f
+  front.Fx = drive_split * Fx_req
+
+  rear.vx = vx
+  rear.vy = vy
+  rear.r = r
+  rear.delta = 0
+  rear.Fz = Fz_r
+  rear.Fx = (1 - drive_split) * Fx_req
+
+  Fx_tires = front.Fxb + rear.Fxb
+  Fy_tires = front.Fyb + rear.Fyb
+  Mz_tires = front.Mz + rear.Mz
+end
+
+"3-DOF double-track vehicle. Four wheel stations with quasi-static lateral load transfer split between the axles by the roll-stiffness distribution, so the nonlinear load sensitivity of the tyre changes the handling balance at the limit. Track width also lets left/right longitudinal force differences generate yaw moment."
+component VehicleDoubleTrack3DOF
+  extends PlanarVehicleBase
+  "Front track width"
+  parameter track_f::Length = 1.55
+  "Rear track width"
+  parameter track_r::Length = 1.55
+  "Front axle share of the total roll moment; above 0.5 biases the car towards limit understeer"
+  parameter eps_f::Real = 0.55
+  "Front Magic Formula stiffness factor. Sets front axle cornering stiffness and lumps in the understeer contribution of front suspension compliance and roll steer."
+  parameter B_f::Real = 8.0
+  "Rear Magic Formula stiffness factor"
+  parameter B_r::Real = 10.0
+  "Magic Formula shape factor"
+  parameter C_tire::Real = 1.9
+  "Magic Formula curvature factor"
+  parameter E_tire::Real = 0.97
+  "Peak friction coefficient at the nominal corner load"
+  parameter mu0::Real = 1.0
+  "Friction load sensitivity"
+  parameter k_mu::Real = 0.15
+
+  fl = WheelStation(x_s = a, y_s = track_f / 2, v_eps = v_eps, B = B_f, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 4)
+  fr = WheelStation(x_s = a, y_s = -track_f / 2, v_eps = v_eps, B = B_f, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 4)
+  rl = WheelStation(x_s = -b, y_s = track_r / 2, v_eps = v_eps, B = B_r, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 4)
+  rr = WheelStation(x_s = -b, y_s = -track_r / 2, v_eps = v_eps, B = B_r, C = C_tire, E = E_tire, mu0 = mu0, k_mu = k_mu, Fz_nom = m * g / 4)
+
+  "Suspension-lagged lateral acceleration driving the roll load transfer"
+  variable ay_lag::Acceleration
+  "Front axle lateral load transfer, one wheel gains it and the other sheds it"
+  variable dFz_yf::Force
+  "Rear axle lateral load transfer"
+  variable dFz_yr::Force
+relations
+  initial ay_lag = 0
+  "First-order roll response, which also breaks the Fz -> Fy -> ay -> Fz algebraic loop"
+  tau_lt * der(ay_lag) = ay - ay_lag
+  "The total roll moment m*ay*h is reacted by the two axles in the ratio set by eps_f"
+  dFz_yf = eps_f * m * ay_lag * h_cg / track_f
+  dFz_yr = (1 - eps_f) * m * ay_lag * h_cg / track_r
+
+  "Corner loads: static, minus pitch transfer, minus roll transfer. Positive ay is leftward, so the right-hand wheels are the loaded outer pair."
+  fl.Fz = m * g * b / (2 * (a + b)) - dFz_x / 2 - dFz_yf
+  fr.Fz = m * g * b / (2 * (a + b)) - dFz_x / 2 + dFz_yf
+  rl.Fz = m * g * a / (2 * (a + b)) + dFz_x / 2 - dFz_yr
+  rr.Fz = m * g * a / (2 * (a + b)) + dFz_x / 2 + dFz_yr
+
+  fl.vx = vx
+  fl.vy = vy
+  fl.r = r
+  fl.delta = delta
+  fl.Fx = drive_split * Fx_req / 2
+
+  fr.vx = vx
+  fr.vy = vy
+  fr.r = r
+  fr.delta = delta
+  fr.Fx = drive_split * Fx_req / 2
+
+  rl.vx = vx
+  rl.vy = vy
+  rl.r = r
+  rl.delta = 0
+  rl.Fx = (1 - drive_split) * Fx_req / 2
+
+  rr.vx = vx
+  rr.vy = vy
+  rr.r = r
+  rr.delta = 0
+  rr.Fx = (1 - drive_split) * Fx_req / 2
+
+  Fx_tires = fl.Fxb + fr.Fxb + rl.Fxb + rr.Fxb
+  Fy_tires = fl.Fyb + fr.Fyb + rl.Fyb + rr.Fyb
+  Mz_tires = fl.Mz + fr.Mz + rl.Mz + rr.Mz
+end

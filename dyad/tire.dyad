@@ -1,0 +1,88 @@
+"Pacejka-style Magic Formula lateral tyre force with load-sensitive friction and friction-ellipse combined-slip derating. Signal-level block: all ports are plain reals in SI units (alpha in rad, Fz and Fx in N)."
+component MagicFormulaTire
+  "Slip angle [rad] in the ISO tyre frame, alpha = atan(vy_tyre/vx_tyre)"
+  alpha = RealInput()
+  "Vertical load [N], positive in compression"
+  Fz = RealInput()
+  "Longitudinal force [N] generated at the contact patch, positive driving"
+  Fx = RealInput()
+  "Lateral force [N] in the ISO tyre frame, negative for positive slip angle"
+  Fy = RealOutput()
+
+  "Magic Formula stiffness factor"
+  parameter B::Real = 10.0
+  "Magic Formula shape factor"
+  parameter C::Real = 1.9
+  "Magic Formula curvature factor"
+  parameter E::Real = 0.97
+  "Peak friction coefficient at the nominal vertical load"
+  parameter mu0::Real = 1.0
+  "Nominal vertical load [N] at which mu = mu0"
+  parameter Fz_nom::Real = 4000
+  "Friction load sensitivity: fractional loss of mu per unit of Fz/Fz_nom above nominal"
+  parameter k_mu::Real = 0.15
+  "Regularisation load [N] keeping the rectified vertical load strictly positive"
+  parameter Fz_eps::Real = 1.0
+  "Regularisation for the friction-ellipse square root"
+  parameter ell_eps::Real = 1e-4
+
+  "Smoothly rectified vertical load [N]"
+  variable Fz_pos::Real
+  "Load-dependent peak friction coefficient"
+  variable mu::Real
+  "Peak lateral force [N]"
+  variable D::Real
+  "Pure-slip lateral force [N]"
+  variable Fy_pure::Real
+  "Longitudinal friction utilisation Fx/(mu*Fz)"
+  variable ex::Real
+  "Friction-ellipse derating factor"
+  variable g_ell::Real
+  "Argument of the outer sine of the Magic Formula"
+  variable phi::Real
+relations
+  "Smooth positive part of Fz so that wheel lift cannot produce negative load"
+  Fz_pos = 0.5 * (Fz + sqrt(Fz^2 + Fz_eps^2))
+  "Friction falls off as the tyre is loaded above nominal"
+  mu = mu0 * (1 - k_mu * (Fz_pos / Fz_nom - 1))
+  "Peak lateral force"
+  D = mu * Fz_pos
+  "Magic Formula argument"
+  phi = B * alpha - E * (B * alpha - atan(B * alpha))
+  "Pure-slip lateral force; cornering stiffness at alpha=0 is B*C*D"
+  Fy_pure = -D * sin(C * atan(phi))
+  "Fraction of the friction circle already used longitudinally"
+  ex = Fx / D
+  "Friction ellipse, smoothed so the square root argument stays strictly positive"
+  g_ell = sqrt(0.5 * ((1 - ex^2) + sqrt((1 - ex^2)^2 + ell_eps^2)))
+  "Combined-slip lateral force"
+  Fy = g_ell * Fy_pure
+end
+
+"Sweeps slip angle through a ramp at fixed vertical load and fixed longitudinal force."
+test component TestTireSweep
+  "Peak slip angle reached at the end of the sweep [rad]"
+  parameter alpha_max::Real = 0.35
+  "Vertical load held on the tyre [N]"
+  parameter Fz_test::Real = 4000
+  "Longitudinal force held on the tyre [N]"
+  parameter Fx_test::Real = 0.0
+  "Sweep duration [s]"
+  parameter T_sweep::Real = 1.0
+
+  alpha_src = BlockComponents.Sources.Ramp(start_time = 0.0, offset = 0.0, duration = T_sweep, height = alpha_max)
+  Fz_src = BlockComponents.Sources.Constant(k = Fz_test)
+  Fx_src = BlockComponents.Sources.Constant(k = Fx_test)
+  tire = MagicFormulaTire(Fz_nom = 4000)
+  work = BlockComponents.Continuous.Integrator()
+relations
+  connect(alpha_src.y, tire.alpha)
+  connect(Fz_src.y, tire.Fz)
+  connect(Fx_src.y, tire.Fx)
+  connect(tire.Fy, work.u)
+end
+
+analysis TireSweep
+  extends TransientAnalysis(stop = 1.0, abstol = 1e-9, reltol = 1e-9)
+  model = TestTireSweep()
+end

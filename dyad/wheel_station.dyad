@@ -1,0 +1,73 @@
+"One wheel station of a planar vehicle. Maps CG body-frame velocities to the hub, rotates into the steered tyre frame, evaluates the Magic Formula tyre, and rotates the resulting forces back into the body frame. Signal-level block: all ports are plain reals in SI units. Used unchanged by both the single-track and the double-track vehicle so that corner physics is identical between them."
+component WheelStation
+  "Body-frame longitudinal velocity of the CG [m/s]"
+  vx = RealInput()
+  "Body-frame lateral velocity of the CG [m/s]"
+  vy = RealInput()
+  "Yaw rate [rad/s], positive nose-left"
+  r = RealInput()
+  "Road-wheel steer angle [rad], positive steering left"
+  delta = RealInput()
+  "Vertical load on this station [N]"
+  Fz = RealInput()
+  "Longitudinal force at this contact patch [N], along the tyre x axis, positive driving"
+  Fx = RealInput()
+  "Body-frame longitudinal force from this station [N]"
+  Fxb = RealOutput()
+  "Body-frame lateral force from this station [N]"
+  Fyb = RealOutput()
+  "Yaw moment about the CG from this station [N.m]"
+  Mz = RealOutput()
+
+  "Station position ahead of the CG [m], negative for a rear station"
+  parameter x_s::Real = 1.2
+  "Station position left of the CG [m], zero for a single-track axle"
+  parameter y_s::Real = 0.0
+  "Low-speed regularisation velocity [m/s] used in the slip-angle definition"
+  parameter v_eps::Real = 1.0
+
+  "Magic Formula stiffness factor"
+  parameter B::Real = 10.0
+  "Magic Formula shape factor"
+  parameter C::Real = 1.9
+  "Magic Formula curvature factor"
+  parameter E::Real = 0.97
+  "Peak friction coefficient at the nominal vertical load"
+  parameter mu0::Real = 1.0
+  "Nominal vertical load [N] at which mu = mu0"
+  parameter Fz_nom::Real = 4000
+  "Friction load sensitivity"
+  parameter k_mu::Real = 0.15
+
+  tire = MagicFormulaTire(B = B, C = C, E = E, mu0 = mu0, Fz_nom = Fz_nom, k_mu = k_mu)
+
+  "Hub longitudinal velocity in the body frame [m/s]"
+  variable vx_h::Real
+  "Hub lateral velocity in the body frame [m/s]"
+  variable vy_h::Real
+  "Hub longitudinal velocity in the steered tyre frame [m/s]"
+  variable vx_t::Real
+  "Hub lateral velocity in the steered tyre frame [m/s]"
+  variable vy_t::Real
+  "Slip angle [rad]"
+  variable alpha::Real
+relations
+  "Rigid-body velocity of the hub"
+  vx_h = vx - r * y_s
+  vy_h = vy + r * x_s
+  "Rotate the hub velocity into the steered tyre frame"
+  vx_t = vx_h * cos(delta) + vy_h * sin(delta)
+  vy_t = -vx_h * sin(delta) + vy_h * cos(delta)
+  "Slip angle, regularised so it stays smooth and bounded as the vehicle slows to a stop"
+  alpha = atan(vy_t / sqrt(vx_t^2 + v_eps^2))
+
+  tire.alpha = alpha
+  tire.Fz = Fz
+  tire.Fx = Fx
+
+  "Rotate the tyre-frame forces back into the body frame"
+  Fxb = Fx * cos(delta) - tire.Fy * sin(delta)
+  Fyb = Fx * sin(delta) + tire.Fy * cos(delta)
+  "Yaw moment about the CG"
+  Mz = x_s * Fyb - y_s * Fxb
+end

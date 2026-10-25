@@ -1,0 +1,85 @@
+"Longitudinal speed-hold PI plus a first-order steering actuator. The steering command delta_cmd is a free parameter with no binding, so an external controller can write it at every sample instant and the actuator lag provides the zero-order hold smoothing a real steering system would."
+component DriverActuator
+  "Measured forward speed [m/s]"
+  vx_meas = RealInput()
+  "Longitudinal force demand at the contact patches [N]"
+  Fx = RealOutput()
+  "Road-wheel steer angle delivered to the vehicle [rad]"
+  delta = RealOutput()
+
+  "Steering command held between controller samples [rad]. Written by the MPC."
+  parameter delta_cmd::Real = 0.0
+  "Target forward speed [m/s]"
+  parameter vx_target::Real = 25.0
+  "Longitudinal force needed to balance drag and rolling resistance at vx_target [N]"
+  parameter Fx_trim::Real = 456.3
+  "Speed-loop proportional gain [N/(m/s)]"
+  parameter kp_v::Real = 2000.0
+  "Speed-loop integral gain [N/m]"
+  parameter ki_v::Real = 800.0
+  "Anti-windup back-calculation time constant [s]"
+  parameter Tt_v::Real = 0.1
+  "Longitudinal force authority [N]"
+  parameter Fx_max::Real = 8000.0
+  "Steering actuator time constant [s]"
+  parameter tau_s::Real = 0.06
+
+  "Speed error [m/s]"
+  variable v_err::Real
+  "Speed-loop integrator state"
+  variable v_int::Real
+  "Unsaturated force demand [N]"
+  variable Fx_raw::Real
+  "Actual steer angle [rad]"
+  variable delta_act::Real
+relations
+  "Start the integrator at the trim force so the run begins in longitudinal equilibrium"
+  initial v_int = Fx_trim / ki_v
+  initial delta_act = 0
+
+  v_err = vx_target - vx_meas
+  Fx_raw = kp_v * v_err + ki_v * v_int
+  "Smooth saturation keeps the force bounded without a derivative discontinuity"
+  Fx = Fx_max * tanh(Fx_raw / Fx_max)
+  "Integrate the error, with back-calculation anti-windup. The ki_v factor converts the force excess back into a speed-error rate; without it the term carries N/s into an m/s balance and the loop settles with a standing speed error, because tanh is never exactly linear."
+  der(v_int) = v_err + (Fx - Fx_raw) / (ki_v * Tt_v)
+
+  "First-order steering actuator"
+  tau_s * der(delta_act) = delta_cmd - delta_act
+  delta = delta_act
+end
+
+"Closed-loop plant: double-track 3-DOF vehicle with speed hold and a steering actuator. The lateral loop is closed externally by the MPC driver."
+component DLCPlantDoubleTrack
+  "Target and initial forward speed [m/s]"
+  parameter vx0::Real = 25.0
+  "Trim longitudinal force at vx0 [N]"
+  parameter Fx_trim::Real = 0.5 * 1.225 * 0.70 * vx0^2 + 0.012 * 1600 * 9.81
+
+  car = VehicleDoubleTrack3DOF(vx0 = vx0)
+  act = DriverActuator(vx_target = vx0, Fx_trim = Fx_trim)
+relations
+  act.vx_meas = car.vx
+  car.Fx_req = act.Fx
+  car.delta = act.delta
+end
+
+"Closed-loop plant: single-track 3-DOF vehicle with speed hold and a steering actuator, identical plumbing to DLCPlantDoubleTrack."
+component DLCPlantBicycle
+  "Target and initial forward speed [m/s]"
+  parameter vx0::Real = 25.0
+  "Trim longitudinal force at vx0 [N]"
+  parameter Fx_trim::Real = 0.5 * 1.225 * 0.70 * vx0^2 + 0.012 * 1600 * 9.81
+
+  car = VehicleBicycle3DOF(vx0 = vx0)
+  act = DriverActuator(vx_target = vx0, Fx_trim = Fx_trim)
+relations
+  act.vx_meas = car.vx
+  car.Fx_req = act.Fx
+  car.delta = act.delta
+end
+
+analysis DLCPlantOpenLoop
+  extends TransientAnalysis(stop = 6.0, abstol = 1e-8, reltol = 1e-8)
+  model = DLCPlantDoubleTrack()
+end

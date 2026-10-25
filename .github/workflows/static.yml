@@ -32,7 +32,7 @@ jobs:
       - name: Prepare website
         run: |
           mkdir -p _site
-          cp scripts/vehicle_3d_overview.html _site/index.html
+          cp scripts/dlc_3d_follow.html _site/index.html
           cp scripts/plotly.min.js _site/plotly.min.js
 
       - name: Upload website

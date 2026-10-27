@@ -1,0 +1,210 @@
+"Double lane change reference path, built analytically from two quintic smoothsteps. S(u) = 6u^5 - 15u^4 + 10u^3 has S' = S'' = 0 at both ends, so the path is curvature-continuous and the driver is never asked to step the steering wheel at a section boundary. Written inline rather than as a Julia function so the expressions stay symbolic and differentiable for index reduction."
+component DoubleLaneChangePath
+  "Station along the course [m]. The path runs along X and heading stays small, so X is used as the station."
+  s = RealInput()
+  "Reference lateral position [m]"
+  y = RealOutput()
+  "Reference heading [rad]"
+  psi_path = RealOutput()
+  "Reference curvature [1/m]"
+  kappa = RealOutput()
+
+  "Station at which the first transition begins [m]"
+  parameter s1::Real = 6.6
+  "Length of the first transition [m]"
+  parameter w1::Real = 51.0
+  "Station at which the second transition begins [m]"
+  parameter s2::Real = 56.2
+  "Length of the second transition [m]"
+  parameter w2::Real = 50.0
+  "Lateral offset of the side lane [m]"
+  parameter D::Real = 3.8
+
+  "Normalised progress through the first transition"
+  variable u1::Real
+  "Normalised progress through the second transition"
+  variable u2::Real
+  variable S1::Real
+  variable S2::Real
+  variable Sd1::Real
+  variable Sd2::Real
+  variable Sdd1::Real
+  variable Sdd2::Real
+  "dy/ds"
+  variable dy::Real
+  "d2y/ds2"
+  variable ddy::Real
+relations
+  u1 = (s - s1) / w1
+  u2 = (s - s2) / w2
+
+  "Quintic smoothstep, clamped outside the transition. The polynomial is safe to evaluate for any u (no division, no root), so eager ifelse cannot produce a NaN in the unselected branch."
+  S1 = ifelse(u1 <= 0, 0.0, ifelse(u1 >= 1, 1.0, u1^3 * (10 + u1 * (-15 + 6 * u1))))
+  S2 = ifelse(u2 <= 0, 0.0, ifelse(u2 >= 1, 1.0, u2^3 * (10 + u2 * (-15 + 6 * u2))))
+  Sd1 = ifelse(u1 <= 0, 0.0, ifelse(u1 >= 1, 0.0, 30 * u1^2 * (1 - u1)^2))
+  Sd2 = ifelse(u2 <= 0, 0.0, ifelse(u2 >= 1, 0.0, 30 * u2^2 * (1 - u2)^2))
+  Sdd1 = ifelse(u1 <= 0, 0.0, ifelse(u1 >= 1, 0.0, 60 * u1 * (1 + u1 * (-3 + 2 * u1))))
+  Sdd2 = ifelse(u2 <= 0, 0.0, ifelse(u2 >= 1, 0.0, 60 * u2 * (1 + u2 * (-3 + 2 * u2))))
+
+  "Out to the side lane on the first smoothstep, back again on the second"
+  y   = D * (S1 - S2)
+  dy  = D * (Sd1 / w1 - Sd2 / w2)
+  ddy = D * (Sdd1 / w1^2 - Sdd2 / w2^2)
+
+  psi_path = atan(dy)
+  kappa = ddy / (1 + dy^2)^1.5
+end
+
+"Preview (pure-pursuit) lateral driver. Looks a speed-scaled distance ahead along its own heading, measures where the reference path is at that station, converts the offset into a desired path curvature, and turns that into a steering angle through an understeer-compensated Ackermann relation."
+component PreviewDriver
+  "Inertial X position of the CG [m]"
+  X = RealInput()
+  "Inertial Y position of the CG [m]"
+  Y = RealInput()
+  "Heading angle [rad]"
+  psi = RealInput()
+  "Forward speed [m/s]"
+  vx = RealInput()
+  "Reference lateral position sampled at s_preview [m]"
+  y_ref = RealInput()
+  "Reference heading sampled at s_preview [rad]"
+  psi_ref = RealInput()
+  "Station at which the reference path should be sampled [m]"
+  s_preview = RealOutput()
+  "Road-wheel steer angle [rad]"
+  delta = RealOutput()
+
+  "Preview time [s]. A driver previews in time, not distance: a fixed look-ahead distance detunes itself as speed changes."
+  parameter t_preview::Real = 0.6
+  "Preview distance floor [m], so the look-ahead stays sane at low speed"
+  parameter L_min::Real = 3.0
+  "Gain on the pure-pursuit lateral term"
+  parameter k_lat::Real = 1.0
+  "Gain on the heading-error term"
+  parameter k_psi::Real = 0.6
+  "Wheelbase [m]"
+  parameter L_wb::Real = 2.6
+  "Understeer gradient [rad/(m/s2)]. Setting this correctly is what keeps the driver from progressively under-steering as speed rises."
+  parameter K_us::Real = 0.0014803
+  "Steering limit at the road wheel [rad]"
+  parameter delta_max::Real = 0.55
+  "First-order lag representing steering actuator plus neuromuscular delay [s]"
+  parameter tau_s::Real = 0.06
+
+  "Preview distance [m]"
+  variable L_p::Real
+  "Preview point, inertial frame [m]"
+  variable X_p::Real
+  variable Y_p::Real
+  "Lateral offset of the path from the preview point, on the vehicle lateral axis [m]"
+  variable e_lat::Real
+  "Heading error at the preview station [rad]"
+  variable e_psi::Real
+  "Desired path curvature [1/m]"
+  variable kappa_des::Real
+  "Unsaturated steer demand [rad]"
+  variable delta_raw::Real
+  "Saturated steer demand [rad]"
+  variable delta_sat::Real
+  "Delivered steer angle [rad]"
+  variable delta_act::Real
+relations
+  initial delta_act = 0
+
+  "Preview distance scales with speed"
+  L_p = L_min + t_preview * vx
+  "Preview point projected ahead along the current heading"
+  X_p = X + L_p * cos(psi)
+  Y_p = Y + L_p * sin(psi)
+  s_preview = X_p
+
+  "Lateral offset of the path from the preview point, resolved on the vehicle's lateral axis"
+  e_lat = (y_ref - Y_p) * cos(psi)
+  e_psi = psi_ref - psi
+
+  "Pure pursuit: 2e/L^2 is the curvature of the circle through the preview point that is tangent to the current heading. The heading term adds damping; dividing by L_p keeps it a curvature."
+  kappa_des = k_lat * 2 * e_lat / L_p^2 + k_psi * e_psi / L_p
+
+  "Understeer-compensated Ackermann: the steer angle that produces this curvature in steady state, including the slip angles the axles need"
+  delta_raw = (L_wb + K_us * vx^2) * kappa_des
+
+  "Smooth saturation. The quartic soft clip is near-exact below the limit (0.03 % error at a third of lock) where tanh would already be 1 % low, and it is bounded and differentiable at the limit."
+  delta_sat = delta_raw / (1 + (delta_raw / delta_max)^4)^0.25
+
+  "First-order lag for steering actuator and neuromuscular delay. A hard rate limit is deliberately not applied: the lag already bounds how fast the wheel can move, and does so without introducing a derivative discontinuity for the solver."
+  tau_s * der(delta_act) = delta_sat - delta_act
+  delta = delta_act
+end
+
+"Closed-loop double lane change driven entirely inside Dyad: double-track vehicle, speed hold, analytic reference path and a preview driver. Unlike the MPC study this needs no external solver, so it runs directly as a Dyad analysis."
+component PreviewDriverDLC
+  "Target and initial forward speed [m/s]"
+  parameter vx0::Real = 25.0
+  "Trim longitudinal force at vx0 [N]"
+  parameter Fx_trim::Real = 0.5 * 1.225 * 0.70 * vx0^2 + 0.012 * 1600 * 9.81
+  "Preview time [s]"
+  parameter t_preview::Real = 0.6
+  "Heading-error gain"
+  parameter k_psi::Real = 0.6
+  "Reference path geometry: see DoubleLaneChangePath"
+  parameter s1::Real = 6.6
+  parameter w1::Real = 51.0
+  parameter s2::Real = 56.2
+  parameter w2::Real = 50.0
+  parameter D::Real = 3.8
+
+  car = VehicleDoubleTrack3DOF(vx0 = vx0)
+  speed = SpeedHold(vx_target = vx0, Fx_trim = Fx_trim)
+  refpath = DoubleLaneChangePath(s1 = s1, w1 = w1, s2 = s2, w2 = w2, D = D)
+  driver = PreviewDriver(t_preview = t_preview, k_psi = k_psi)
+relations
+  speed.vx_meas = car.vx
+  car.Fx_req = speed.Fx
+
+  driver.X = car.X
+  driver.Y = car.Y
+  driver.psi = car.psi
+  driver.vx = car.vx
+
+  "Driver asks for a station, the path answers with position and heading there"
+  connect(driver.s_preview, refpath.s)
+  connect(refpath.y, driver.y_ref)
+  connect(refpath.psi_path, driver.psi_ref)
+
+  car.delta = driver.delta
+end
+
+"Same closed loop on the single-track vehicle, for comparison."
+component PreviewDriverDLCBicycle
+  parameter vx0::Real = 25.0
+  parameter Fx_trim::Real = 0.5 * 1.225 * 0.70 * vx0^2 + 0.012 * 1600 * 9.81
+  parameter t_preview::Real = 0.6
+  parameter k_psi::Real = 0.6
+  "Reference path geometry: see DoubleLaneChangePath"
+  parameter s1::Real = 6.6
+  parameter w1::Real = 51.0
+  parameter s2::Real = 56.2
+  parameter w2::Real = 50.0
+  parameter D::Real = 3.8
+
+  car = VehicleBicycle3DOF(vx0 = vx0)
+  speed = SpeedHold(vx_target = vx0, Fx_trim = Fx_trim)
+  refpath = DoubleLaneChangePath(s1 = s1, w1 = w1, s2 = s2, w2 = w2, D = D)
+  driver = PreviewDriver(t_preview = t_preview, k_psi = k_psi)
+relations
+  speed.vx_meas = car.vx
+  car.Fx_req = speed.Fx
+  driver.X = car.X
+  driver.Y = car.Y
+  driver.psi = car.psi
+  driver.vx = car.vx
+  connect(driver.s_preview, refpath.s)
+  connect(refpath.y, driver.y_ref)
+  connect(refpath.psi_path, driver.psi_ref)
+  car.delta = driver.delta
+end
+
+analysis PreviewDriverRun
+  extends TransientAnalysis(stop = 7.0, abstol = 1e-8, reltol = 1e-8)
+  model = PreviewDriverDLC()
+end

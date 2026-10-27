@@ -1,4 +1,42 @@
-"Longitudinal speed-hold PI plus a first-order steering actuator. The steering command delta_cmd is a free parameter with no binding, so an external controller can write it at every sample instant and the actuator lag provides the zero-order hold smoothing a real steering system would."
+"Longitudinal speed-hold PI with back-calculation anti-windup. Shared by every closed-loop plant so the longitudinal behaviour is identical whichever lateral controller is driving."
+component SpeedHold
+  "Measured forward speed [m/s]"
+  vx_meas = RealInput()
+  "Longitudinal force demand at the contact patches [N]"
+  Fx = RealOutput()
+
+  "Target forward speed [m/s]"
+  parameter vx_target::Real = 25.0
+  "Longitudinal force needed to balance drag and rolling resistance at vx_target [N]"
+  parameter Fx_trim::Real = 456.3
+  "Speed-loop proportional gain [N/(m/s)]"
+  parameter kp_v::Real = 2000.0
+  "Speed-loop integral gain [N/m]"
+  parameter ki_v::Real = 800.0
+  "Anti-windup back-calculation time constant [s]"
+  parameter Tt_v::Real = 0.1
+  "Longitudinal force authority [N]"
+  parameter Fx_max::Real = 8000.0
+
+  "Speed error [m/s]"
+  variable v_err::Real
+  "Speed-loop integrator state"
+  variable v_int::Real
+  "Unsaturated force demand [N]"
+  variable Fx_raw::Real
+relations
+  "Start the integrator at the trim force so the run begins in longitudinal equilibrium"
+  initial v_int = Fx_trim / ki_v
+
+  v_err = vx_target - vx_meas
+  Fx_raw = kp_v * v_err + ki_v * v_int
+  "Smooth saturation keeps the force bounded without a derivative discontinuity"
+  Fx = Fx_max * tanh(Fx_raw / Fx_max)
+  "Integrate the error, with back-calculation anti-windup. The ki_v factor converts the force excess back into a speed-error rate; without it the term carries N/s into an m/s balance and the loop settles with a standing speed error, because tanh is never exactly linear."
+  der(v_int) = v_err + (Fx - Fx_raw) / (ki_v * Tt_v)
+end
+
+"Speed hold plus a first-order steering actuator. The steering command delta_cmd is a free parameter with no binding, so an external controller can write it at every sample instant and the actuator lag provides the hold smoothing a real steering system would."
 component DriverActuator
   "Measured forward speed [m/s]"
   vx_meas = RealInput()
@@ -13,36 +51,17 @@ component DriverActuator
   parameter vx_target::Real = 25.0
   "Longitudinal force needed to balance drag and rolling resistance at vx_target [N]"
   parameter Fx_trim::Real = 456.3
-  "Speed-loop proportional gain [N/(m/s)]"
-  parameter kp_v::Real = 2000.0
-  "Speed-loop integral gain [N/m]"
-  parameter ki_v::Real = 800.0
-  "Anti-windup back-calculation time constant [s]"
-  parameter Tt_v::Real = 0.1
-  "Longitudinal force authority [N]"
-  parameter Fx_max::Real = 8000.0
   "Steering actuator time constant [s]"
   parameter tau_s::Real = 0.06
 
-  "Speed error [m/s]"
-  variable v_err::Real
-  "Speed-loop integrator state"
-  variable v_int::Real
-  "Unsaturated force demand [N]"
-  variable Fx_raw::Real
+  speed = SpeedHold(vx_target = vx_target, Fx_trim = Fx_trim)
+
   "Actual steer angle [rad]"
   variable delta_act::Real
 relations
-  "Start the integrator at the trim force so the run begins in longitudinal equilibrium"
-  initial v_int = Fx_trim / ki_v
   initial delta_act = 0
-
-  v_err = vx_target - vx_meas
-  Fx_raw = kp_v * v_err + ki_v * v_int
-  "Smooth saturation keeps the force bounded without a derivative discontinuity"
-  Fx = Fx_max * tanh(Fx_raw / Fx_max)
-  "Integrate the error, with back-calculation anti-windup. The ki_v factor converts the force excess back into a speed-error rate; without it the term carries N/s into an m/s balance and the loop settles with a standing speed error, because tanh is never exactly linear."
-  der(v_int) = v_err + (Fx - Fx_raw) / (ki_v * Tt_v)
+  speed.vx_meas = vx_meas
+  Fx = speed.Fx
 
   "First-order steering actuator"
   tau_s * der(delta_act) = delta_cmd - delta_act

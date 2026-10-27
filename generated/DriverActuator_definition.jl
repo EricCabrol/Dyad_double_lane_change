@@ -5,9 +5,9 @@
 
 
 @doc Markdown.doc"""
-   DriverActuator(; name, delta_cmd, vx_target, Fx_trim, kp_v, ki_v, Tt_v, Fx_max, tau_s)
+   DriverActuator(; name, delta_cmd, vx_target, Fx_trim, tau_s)
 
-Longitudinal speed-hold PI plus a first-order steering actuator. The steering command delta_cmd is a free parameter with no binding, so an external controller can write it at every sample instant and the actuator lag provides the zero-order hold smoothing a real steering system would.
+Speed hold plus a first-order steering actuator. The steering command delta_cmd is a free parameter with no binding, so an external controller can write it at every sample instant and the actuator lag provides the hold smoothing a real steering system would.
 
 ## Parameters:
 
@@ -16,10 +16,6 @@ Longitudinal speed-hold PI plus a first-order steering actuator. The steering co
 | `delta_cmd`         | Steering command held between controller samples [rad]. Written by the MPC.                         | --  |   0.0 |
 | `vx_target`         | Target forward speed [m/s]                         | --  |   25.0 |
 | `Fx_trim`         | Longitudinal force needed to balance drag and rolling resistance at vx_target [N]                         | --  |   456.3 |
-| `kp_v`         | Speed-loop proportional gain [N/(m/s)]                         | --  |   2000.0 |
-| `ki_v`         | Speed-loop integral gain [N/m]                         | --  |   800.0 |
-| `Tt_v`         | Anti-windup back-calculation time constant [s]                         | --  |   0.1 |
-| `Fx_max`         | Longitudinal force authority [N]                         | --  |   8000.0 |
 | `tau_s`         | Steering actuator time constant [s]                         | --  |   0.06 |
 
 ## Connectors
@@ -32,12 +28,9 @@ Longitudinal speed-hold PI plus a first-order steering actuator. The steering co
 
 | Name         | Description                         | Units  | 
 | ------------ | ----------------------------------- | ------ |
-| `v_err`         | Speed error [m/s]                         | --  |
-| `v_int`         | Speed-loop integrator state                         | --  |
-| `Fx_raw`         | Unsaturated force demand [N]                         | --  |
 | `delta_act`         | Actual steer angle [rad]                         | --  |
 """
-@component function DriverActuator(; name = nothing, delta_cmd=Float64(0.0), vx_target=Float64(25.0), Fx_trim=456.3, kp_v=Float64(2000.0), ki_v=Float64(800.0), Tt_v=0.1, Fx_max=Float64(8000.0), tau_s=0.06, kwargs...)
+@component function DriverActuator(; name = nothing, delta_cmd=Float64(0.0), vx_target=Float64(25.0), Fx_trim=456.3, tau_s=0.06, kwargs...)
   isnothing(name) && throw(ArgumentError("""
     The `name` keyword must be provided. Please consider using the `@named` macro,
     like so:
@@ -77,18 +70,6 @@ Longitudinal speed-hold PI plus a first-order steering actuator. The steering co
   __local__Fx_trim = Fx_trim
   append!(__params, @parameters (Fx_trim::Real), [description = "Longitudinal force needed to balance drag and rolling resistance at vx_target [N]"])
   __initial_conditions[Fx_trim] = __local__Fx_trim
-  __local__kp_v = kp_v
-  append!(__params, @parameters (kp_v::Real), [description = "Speed-loop proportional gain [N/(m/s)]"])
-  __initial_conditions[kp_v] = __local__kp_v
-  __local__ki_v = ki_v
-  append!(__params, @parameters (ki_v::Real), [description = "Speed-loop integral gain [N/m]"])
-  __initial_conditions[ki_v] = __local__ki_v
-  __local__Tt_v = Tt_v
-  append!(__params, @parameters (Tt_v::Real), [description = "Anti-windup back-calculation time constant [s]"])
-  __initial_conditions[Tt_v] = __local__Tt_v
-  __local__Fx_max = Fx_max
-  append!(__params, @parameters (Fx_max::Real), [description = "Longitudinal force authority [N]"])
-  __initial_conditions[Fx_max] = __local__Fx_max
   __local__tau_s = tau_s
   append!(__params, @parameters (tau_s::Real), [description = "Steering actuator time constant [s]"])
   __initial_conditions[tau_s] = __local__tau_s
@@ -101,21 +82,9 @@ Longitudinal speed-hold PI plus a first-order steering actuator. The steering co
   append!(__vars, @variables (delta(t)::Real), [output = true])
 
   ### Variables (declarations)
-  append!(__vars, @variables (v_err(t)::Real), [description = "Speed error [m/s]"])
-  append!(__vars, @variables (v_int(t)::Real), [description = "Speed-loop integrator state"])
-  append!(__vars, @variables (Fx_raw(t)::Real), [description = "Unsaturated force demand [N]"])
   append!(__vars, @variables (delta_act(t)::Real), [description = "Actual steer angle [rad]"])
 
   ### Variables (assignments)
-  __ovr_v_err = pop!(__overrides, "v_err", nothing); isnothing(__ovr_v_err) || push!(__eqs, v_err ~ __ovr_v_err)
-  __ovr_v_err__initial = pop!(__overrides, "v_err__initial", nothing); isnothing(__ovr_v_err__initial) || (__initial_conditions[v_err] = __ovr_v_err__initial)
-  __ovr_v_err__guess = pop!(__overrides, "v_err__guess", nothing)
-  __ovr_v_int = pop!(__overrides, "v_int", nothing); isnothing(__ovr_v_int) || push!(__eqs, v_int ~ __ovr_v_int)
-  __ovr_v_int__initial = pop!(__overrides, "v_int__initial", nothing); isnothing(__ovr_v_int__initial) || (__initial_conditions[v_int] = __ovr_v_int__initial)
-  __ovr_v_int__guess = pop!(__overrides, "v_int__guess", nothing)
-  __ovr_Fx_raw = pop!(__overrides, "Fx_raw", nothing); isnothing(__ovr_Fx_raw) || push!(__eqs, Fx_raw ~ __ovr_Fx_raw)
-  __ovr_Fx_raw__initial = pop!(__overrides, "Fx_raw__initial", nothing); isnothing(__ovr_Fx_raw__initial) || (__initial_conditions[Fx_raw] = __ovr_Fx_raw__initial)
-  __ovr_Fx_raw__guess = pop!(__overrides, "Fx_raw__guess", nothing)
   __ovr_delta_act = pop!(__overrides, "delta_act", nothing); isnothing(__ovr_delta_act) || push!(__eqs, delta_act ~ __ovr_delta_act)
   __ovr_delta_act__initial = pop!(__overrides, "delta_act__initial", nothing); isnothing(__ovr_delta_act__initial) || (__initial_conditions[delta_act] = __ovr_delta_act__initial)
   __ovr_delta_act__guess = pop!(__overrides, "delta_act__guess", nothing)
@@ -124,31 +93,25 @@ Longitudinal speed-hold PI plus a first-order steering actuator. The steering co
   __constants = Any[]
 
   ### Components
+  # Subcomponent speed of type TestVehicleDynamics.SpeedHold
+  speed_overrides = __pop_subcomponent_overrides!(__overrides, "speed")
+  push!(__systems, @named speed = TestVehicleDynamics.SpeedHold(; vx_target=vx_target, Fx_trim=Fx_trim, speed_overrides...))
 
   ### Check there are no unmatched overrides
   isempty(__overrides) || throw(ArgumentError("overrides: [$(join(keys(__overrides), ", "))] don't match names found in model. These names may exist in the model but could have been conditionally excluded."))
 
   ### Guesses
-  isnothing(__ovr_v_err__guess) || (__guesses[v_err] = __ovr_v_err__guess)
-  isnothing(__ovr_v_int__guess) || (__guesses[v_int] = __ovr_v_int__guess)
-  isnothing(__ovr_Fx_raw__guess) || (__guesses[Fx_raw] = __ovr_Fx_raw__guess)
   isnothing(__ovr_delta_act__guess) || (__guesses[delta_act] = __ovr_delta_act__guess)
 
   ### Initialization Equations
-  # Start the integrator at the trim force so the run begins in longitudinal equilibrium
-  push!(__initialization_eqs, v_int ~ Fx_trim / ki_v)
   push!(__initialization_eqs, delta_act ~ 0)
 
   ### Assertions
   __assertions = []
 
   ### Equations
-  push!(__eqs, v_err ~ vx_target - vx_meas)
-  push!(__eqs, Fx_raw ~ kp_v * v_err + ki_v * v_int)
-  # Smooth saturation keeps the force bounded without a derivative discontinuity
-  push!(__eqs, Fx ~ Fx_max * tanh(Fx_raw / Fx_max))
-  # Integrate the error, with back-calculation anti-windup. The ki_v factor converts the force excess back into a speed-error rate; without it the term carries N/s into an m/s balance and the loop settles with a standing speed error, because tanh is never exactly linear.
-  push!(__eqs, ModelingToolkit.D_nounits(v_int) ~ v_err + (Fx - Fx_raw) / (ki_v * Tt_v))
+  push!(__eqs, speed.vx_meas ~ vx_meas)
+  push!(__eqs, Fx ~ speed.Fx)
   # First-order steering actuator
   push!(__eqs, tau_s * ModelingToolkit.D_nounits(delta_act) ~ delta_cmd - delta_act)
   push!(__eqs, delta ~ delta_act)
